@@ -1,18 +1,50 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Navigation from '@/components/Navigation';
 
 interface CalendarDay {
   date: number;
   isCurrentMonth: boolean;
   isToday: boolean;
-  hasEvent: boolean;
+  hasEntry: boolean;
+  fullDate: string;
+}
+
+interface DayEntry {
+  date: string;
+  morningPlan?: string;
+  eveningReflection?: string;
+  tasks?: {
+    priority1: string;
+    priority3: string[];
+    priority5: string[];
+  };
 }
 
 export default function PlanPage() {
-  const [selectedDate, setSelectedDate] = useState<number | null>(null);
+  const router = useRouter();
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [currentMonth, setCurrentMonth] = useState(new Date());
+  
+  // Sample entries data
+  const [entries, setEntries] = useState<DayEntry[]>([
+    {
+      date: '2024-01-15',
+      morningPlan: 'Focus on project presentation and gym session',
+      tasks: {
+        priority1: 'Complete project presentation',
+        priority3: ['Gym workout', 'Review quarterly goals', 'Call family'],
+        priority5: ['Organize desk', 'Read 20 pages', 'Meditation', 'Plan tomorrow', 'Grocery shopping']
+      }
+    },
+    {
+      date: '2024-01-20',
+      morningPlan: 'Deep work on coding project',
+      eveningReflection: 'Great productive day, learned new patterns'
+    }
+  ]);
 
   // Sample goals and tasks
   const [goals] = useState([
@@ -27,6 +59,34 @@ export default function PlanPage() {
     { id: 3, text: 'Gratitude practice', completed: false },
     { id: 4, text: 'Review weekly goals', completed: true },
   ]);
+
+  // Helper functions
+  const formatDate = (date: Date): string => {
+    return date.toISOString().split('T')[0];
+  };
+
+  const hasEntryForDate = (dateStr: string): boolean => {
+    return entries.some(entry => entry.date === dateStr);
+  };
+
+  const getTodayString = (): string => {
+    return formatDate(new Date());
+  };
+
+  const handleDateClick = (day: CalendarDay) => {
+    if (day.isCurrentMonth) {
+      const clickedDate = formatDate(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day.date));
+      setSelectedDate(clickedDate);
+      
+      // Navigate to entry page for the selected date
+      router.push(`/plan/entry?date=${clickedDate}`);
+    }
+  };
+
+  const handleAddTodayEntry = () => {
+    const today = getTodayString();
+    router.push(`/plan/entry?date=${today}`);
+  };
 
   // Generate calendar days
   const generateCalendarDays = (): CalendarDay[] => {
@@ -43,12 +103,14 @@ export default function PlanPage() {
     for (let i = 0; i < 42; i++) {
       const currentDate = new Date(startDate);
       currentDate.setDate(startDate.getDate() + i);
+      const dateStr = formatDate(currentDate);
       
       days.push({
         date: currentDate.getDate(),
         isCurrentMonth: currentDate.getMonth() === month,
         isToday: currentDate.toDateString() === today.toDateString(),
-        hasEvent: Math.random() > 0.8, // Random events for demo
+        hasEntry: hasEntryForDate(dateStr),
+        fullDate: dateStr,
       });
     }
 
@@ -78,6 +140,19 @@ export default function PlanPage() {
         <div className="text-center py-4">
           <h1 className="text-3xl sm:text-4xl font-light text-slate-700 mb-2">Your Plan</h1>
           <p className="text-slate-500">Track your goals and plan your journey</p>
+        </div>
+
+        {/* Add Today's Entry Button */}
+        <div className="flex justify-center">
+          <button
+            onClick={handleAddTodayEntry}
+            className="bg-gradient-to-r from-blue-500 to-green-500 hover:from-blue-600 hover:to-green-600 text-white px-6 py-3 rounded-xl font-medium transition-all duration-200 hover:shadow-lg hover:scale-105 flex items-center space-x-2"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
+            <span>Add Today's Entry</span>
+          </button>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -123,23 +198,40 @@ export default function PlanPage() {
                 {calendarDays.map((day, index) => (
                   <button
                     key={index}
-                    onClick={() => setSelectedDate(day.date)}
-                    className={`relative p-2 text-center text-sm rounded-lg transition-all duration-200 ${
+                    onClick={() => handleDateClick(day)}
+                    className={`relative p-3 text-center text-sm rounded-lg transition-all duration-200 min-h-[2.5rem] ${
                       day.isToday
-                        ? 'bg-blue-500 text-white font-medium'
+                        ? 'bg-blue-500 text-white font-medium shadow-md'
                         : day.isCurrentMonth
-                        ? selectedDate === day.date
-                          ? 'bg-blue-100 text-blue-700'
-                          : 'text-slate-700 hover:bg-slate-100'
-                        : 'text-slate-400'
-                    }`}
+                        ? selectedDate === day.fullDate
+                          ? 'bg-blue-100 text-blue-700 border-2 border-blue-300'
+                          : 'text-slate-700 hover:bg-slate-100 hover:scale-105'
+                        : 'text-slate-400 cursor-default'
+                    } ${day.hasEntry ? 'ring-2 ring-green-300' : ''}`}
+                    disabled={!day.isCurrentMonth}
                   >
                     {day.date}
-                    {day.hasEvent && (
-                      <div className="absolute bottom-1 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-green-400 rounded-full"></div>
+                    {day.hasEntry && (
+                      <div className="absolute bottom-1 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-green-500 rounded-full"></div>
                     )}
                   </button>
                 ))}
+              </div>
+              
+              {/* Calendar Legend */}
+              <div className="flex items-center justify-center space-x-6 mt-4 text-xs text-slate-500">
+                <div className="flex items-center space-x-1">
+                  <div className="w-3 h-3 bg-blue-500 rounded"></div>
+                  <span>Today</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                  <span>Has Entry</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <div className="w-3 h-3 border-2 border-blue-300 rounded"></div>
+                  <span>Selected</span>
+                </div>
               </div>
             </div>
           </div>
