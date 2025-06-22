@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Navigation from '@/components/Navigation';
 
@@ -8,6 +8,34 @@ interface Task {
   priority1: string;
   priority3: string[];
   priority5: string[];
+}
+
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+  resultIndex: number;
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start(): void;
+  stop(): void;
+  onstart: ((this: SpeechRecognition, ev: Event) => any) | null;
+  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => any) | null;
+  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => any) | null;
+  onend: ((this: SpeechRecognition, ev: Event) => any) | null;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition: new () => SpeechRecognition;
+    webkitSpeechRecognition: new () => SpeechRecognition;
+  }
 }
 
 function EntryContent() {
@@ -20,6 +48,15 @@ function EntryContent() {
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [generatedTasks, setGeneratedTasks] = useState<Task | null>(null);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [transcript, setTranscript] = useState<string>('');
+  const [isTranscribing, setIsTranscribing] = useState<boolean>(false);
+  const [audioLevel, setAudioLevel] = useState<number>(0);
+  const [supportsWebSpeech, setSupportsWebSpeech] = useState<boolean>(false);
+  
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animationRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (dateParam) {
@@ -30,6 +67,100 @@ function EntryContent() {
       setSelectedDate(today);
     }
   }, [dateParam]);
+
+  useEffect(() => {
+    // Check for Web Speech API support
+    const checkWebSpeechSupport = () => {
+      const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
+      setSupportsWebSpeech(!!SpeechRecognition);
+      
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+        
+        recognition.onstart = () => {
+          setIsTranscribing(true);
+        };
+        
+        recognition.onresult = (event: SpeechRecognitionEvent) => {
+          let interimTranscript = '';
+          let finalTranscript = '';
+          
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              finalTranscript += transcript + ' ';
+            } else {
+              interimTranscript += transcript;
+            }
+          }
+          
+          if (finalTranscript) {
+            setTranscript(prev => prev + finalTranscript);
+            setMorningPlan(prev => prev + finalTranscript);
+          }
+        };
+        
+        recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+          console.error('Speech recognition error:', event.error);
+          setIsRecording(false);
+          setIsTranscribing(false);
+          
+          // Handle specific error types
+          let errorMessage = '';
+          switch (event.error) {
+            case 'network':
+              errorMessage = 'Network error. Please check your internet connection and try again.';
+              break;
+            case 'not-allowed':
+              errorMessage = 'Microphone access denied. Please allow microphone permissions and try again.';
+              break;
+            case 'no-speech':
+              errorMessage = 'No speech detected. Please try speaking again.';
+              break;
+            case 'audio-capture':
+              errorMessage = 'Audio capture failed. Please check your microphone and try again.';
+              break;
+            case 'service-not-allowed':
+              errorMessage = 'Speech recognition service not available. Please try again later.';
+              break;
+            default:
+              errorMessage = `Speech recognition error: ${event.error}. Please try again.`;
+          }
+          
+          // Show error to user
+          setTimeout(() => {
+            alert(errorMessage);
+          }, 100);
+        };
+        
+        recognition.onend = () => {
+          setIsTranscribing(false);
+          if (isRecording) {
+            recognition.start();
+          }
+        };
+        
+        recognitionRef.current = recognition;
+      }
+    };
+    
+    checkWebSpeechSupport();
+    
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
+  }, [isRecording]);
 
   const formatDisplayDate = (dateStr: string): string => {
     const date = new Date(dateStr + 'T00:00:00');
@@ -55,13 +186,87 @@ function EntryContent() {
     }
   };
 
+  const startAudioVisualization = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const analyser = audioContext.createAnalyser();
+      const microphone = audioContext.createMediaStreamSource(stream);
+      
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      microphone.connect(analyser);
+      
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+      
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      
+      const updateAudioLevel = () => {
+        if (analyserRef.current && isRecording) {
+          analyserRef.current.getByteFrequencyData(dataArray);
+          const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+          setAudioLevel(average / 255);
+          animationRef.current = requestAnimationFrame(updateAudioLevel);
+        }
+      };
+      
+      updateAudioLevel();
+    } catch (error) {
+      console.error('Error accessing microphone:', error);
+    }
+  };
+
   const handleGenerateTasks = async () => {
     if (!morningPlan.trim()) return;
 
     setIsGenerating(true);
     
-    // Simulate AI task generation (replace with actual API call)
-    setTimeout(() => {
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: `Based on this morning plan: "${morningPlan}", please generate prioritized tasks in this exact format:
+          
+          1 BIG GOAL: [One most important task for the day]
+          
+          3 MEDIUM TASKS:
+          - [Important task 1]
+          - [Important task 2] 
+          - [Important task 3]
+          
+          5 SMALL TASKS:
+          - [Supporting task 1]
+          - [Supporting task 2]
+          - [Supporting task 3]
+          - [Supporting task 4]
+          - [Supporting task 5]
+          
+          Please make them actionable and relevant to the morning plan provided.`
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const aiResponse = data?.response || data?.message || data?.content || '';
+        
+        if (!aiResponse) {
+          throw new Error('Empty response from AI');
+        }
+        
+        const parsedTasks = parseAIResponse(aiResponse);
+        setGeneratedTasks(parsedTasks);
+      } else {
+        const errorText = await response.text();
+        console.error('API Error:', response.status, errorText);
+        throw new Error(`Failed to generate tasks: ${response.status}`);
+      }
+    } catch (error) {
+      console.error('Error generating tasks:', error);
+      // Fallback to sample tasks
       const sampleTasks: Task = {
         priority1: 'Complete the most important project milestone',
         priority3: [
@@ -78,18 +283,114 @@ function EntryContent() {
         ]
       };
       setGeneratedTasks(sampleTasks);
+    } finally {
       setIsGenerating(false);
-    }, 2000);
+    }
   };
 
-  const handleVoiceRecord = () => {
-    setIsRecording(!isRecording);
-    // Placeholder for voice recording functionality
-    if (!isRecording) {
-      setTimeout(() => {
+  const parseAIResponse = (response: string | undefined): Task => {
+    // Handle undefined or null response
+    if (!response || typeof response !== 'string') {
+      return {
+        priority1: 'Focus on your most important task',
+        priority3: ['Complete important work', 'Take breaks', 'Connect with others'],
+        priority5: ['Organize workspace', 'Read', 'Plan ahead', 'Self-care', 'Reflect']
+      };
+    }
+
+    const lines = response.split('\n').map(line => line.trim()).filter(line => line);
+    
+    let priority1 = '';
+    const priority3: string[] = [];
+    const priority5: string[] = [];
+    
+    let currentSection = '';
+    
+    for (const line of lines) {
+      if (line.includes('BIG GOAL') || line.includes('MOST IMPORTANT')) {
+        currentSection = 'big';
+        const match = line.match(/:\s*(.+)/);
+        if (match) priority1 = match[1];
+      } else if (line.includes('MEDIUM TASKS') || line.includes('IMPORTANT TASKS')) {
+        currentSection = 'medium';
+      } else if (line.includes('SMALL TASKS') || line.includes('SUPPORTING TASKS')) {
+        currentSection = 'small';
+      } else if (line.startsWith('-') || line.startsWith('•')) {
+        const task = line.replace(/^[-•]\s*/, '');
+        if (currentSection === 'medium' && priority3.length < 3) {
+          priority3.push(task);
+        } else if (currentSection === 'small' && priority5.length < 5) {
+          priority5.push(task);
+        }
+      }
+    }
+    
+    return {
+      priority1: priority1 || 'Focus on your most important task',
+      priority3: priority3.length > 0 ? priority3 : ['Complete important work', 'Take breaks', 'Connect with others'],
+      priority5: priority5.length > 0 ? priority5 : ['Organize workspace', 'Read', 'Plan ahead', 'Self-care', 'Reflect']
+    };
+  };
+
+  const handleVoiceRecord = async () => {
+    if (!supportsWebSpeech) {
+      alert('Speech recognition is not supported in your browser. Please use Chrome or Edge for voice features.');
+      return;
+    }
+
+    if (isRecording) {
+      // Stop recording
+      setIsRecording(false);
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+      setAudioLevel(0);
+    } else {
+      try {
+        // Check for microphone permissions first
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop()); // Stop immediately after permission check
+        
+        // Start recording
+        setIsRecording(true);
+        setTranscript('');
+        
+        if (recognitionRef.current) {
+          try {
+            recognitionRef.current.start();
+          } catch (error) {
+            console.error('Failed to start speech recognition:', error);
+            setIsRecording(false);
+            alert('Failed to start speech recognition. Please try again.');
+            return;
+          }
+        }
+        
+        // Start audio visualization
+        await startAudioVisualization();
+      } catch (error) {
+        console.error('Microphone access error:', error);
         setIsRecording(false);
-        setMorningPlan(prev => prev + " [Voice note: Focus on deep work and important meetings today]");
-      }, 3000);
+        
+        if (error instanceof DOMException) {
+          if (error.name === 'NotAllowedError') {
+            alert('Microphone access denied. Please allow microphone permissions in your browser settings and try again.');
+          } else if (error.name === 'NotFoundError') {
+            alert('No microphone found. Please connect a microphone and try again.');
+          } else {
+            alert('Error accessing microphone. Please check your microphone settings and try again.');
+          }
+        } else {
+          alert('Error starting voice recording. Please try again.');
+        }
+      }
     }
   };
 
@@ -131,23 +432,90 @@ function EntryContent() {
               <div className="text-center p-4 bg-blue-50 rounded-xl">
                 <p className="text-slate-700 font-medium mb-2">Tell me about your plans for today</p>
                 <p className="text-sm text-slate-500">Share your intentions, goals, or what's on your mind</p>
+                {!supportsWebSpeech && (
+                  <p className="text-xs text-amber-600 mt-2">
+                    💡 For voice features, please use Chrome or Edge browser
+                  </p>
+                )}
               </div>
 
-              {/* Voice Recording Button */}
-              <div className="flex justify-center">
-                <button
-                  onClick={handleVoiceRecord}
-                  className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-medium transition-all duration-200 ${
-                    isRecording
-                      ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
-                      : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
-                  }`}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                  <span>{isRecording ? 'Recording...' : 'Voice Note'}</span>
-                </button>
+              {/* Voice Recording Section */}
+              <div className="space-y-4">
+                {/* Recording Button with Audio Visualization */}
+                <div className="flex flex-col items-center space-y-4">
+                  <button
+                    onClick={handleVoiceRecord}
+                    disabled={!supportsWebSpeech}
+                    className={`relative flex items-center space-x-2 px-6 py-3 rounded-xl font-medium transition-all duration-200 ${
+                      isRecording
+                        ? 'bg-red-500 hover:bg-red-600 text-white'
+                        : supportsWebSpeech 
+                        ? 'bg-blue-100 hover:bg-blue-200 text-blue-700'
+                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    }`}
+                  >
+                    {/* Audio Level Indicator */}
+                    {isRecording && (
+                      <div 
+                        className="absolute inset-0 bg-red-400 rounded-xl opacity-30 transition-all duration-100"
+                        style={{ 
+                          transform: `scale(${1 + audioLevel * 0.3})`,
+                          opacity: 0.3 + audioLevel * 0.4
+                        }}
+                      />
+                    )}
+                    
+                    <svg className="w-5 h-5 relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                    </svg>
+                    <span className="relative z-10">
+                      {isRecording ? 'Stop Recording' : 
+                       supportsWebSpeech ? 'Start Voice Note' : 'Voice Not Supported'}
+                    </span>
+                  </button>
+
+                  {/* Audio Visualization Bars */}
+                  {isRecording && (
+                    <div className="flex items-center space-x-1">
+                      {[...Array(5)].map((_, i) => (
+                        <div
+                          key={i}
+                          className="w-1 bg-red-500 rounded-full transition-all duration-100"
+                          style={{
+                            height: `${8 + Math.random() * audioLevel * 20}px`,
+                            opacity: 0.7 + audioLevel * 0.3
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Recording Status */}
+                  {isRecording && (
+                    <div className="flex items-center space-x-2 text-sm text-red-600">
+                      <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                      <span>
+                        {isTranscribing ? 'Listening...' : 'Starting...'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Live Transcription Display */}
+                {(transcript || isRecording) && (
+                  <div className="p-4 bg-blue-50 rounded-xl border border-blue-200">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-1l-4 4z" />
+                      </svg>
+                      <span className="text-sm font-medium text-blue-700">Live Transcription</span>
+                    </div>
+                    <p className="text-slate-700 text-sm leading-relaxed">
+                      {transcript || (isRecording ? 'Start speaking...' : '')}
+                      {isTranscribing && <span className="inline-block w-2 h-4 bg-blue-400 animate-pulse ml-1" />}
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Text Input Alternative */}
@@ -226,23 +594,98 @@ function EntryContent() {
             </div>
           </div>
 
-          {/* Evening Section (Disabled) */}
-          <div className="bg-white/30 backdrop-blur-sm rounded-2xl shadow-sm border border-white/30 p-6 opacity-60">
+          {/* Evening Section */}
+          <div className={`backdrop-blur-sm rounded-2xl shadow-sm border p-6 transition-all duration-300 ${
+            generatedTasks 
+              ? 'bg-white/70 border-white/50 opacity-100' 
+              : 'bg-white/30 border-white/30 opacity-60'
+          }`}>
             <div className="flex items-center space-x-2 mb-6">
               <div className="w-3 h-3 bg-gradient-to-r from-purple-400 to-indigo-500 rounded-full"></div>
               <h2 className="text-xl font-medium text-slate-700">Evening</h2>
-              <span className="text-xs text-slate-500 bg-slate-200 px-2 py-1 rounded-full">Coming Later</span>
+              {!generatedTasks && (
+                <span className="text-xs text-slate-500 bg-slate-200 px-2 py-1 rounded-full">Complete Morning First</span>
+              )}
             </div>
 
-            <div className="space-y-4 text-center py-12">
-              <svg className="w-16 h-16 text-slate-400 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
-              <h3 className="text-lg font-medium text-slate-600">Evening Reflection</h3>
-              <p className="text-slate-500 max-w-sm mx-auto">
-                Complete your morning planning first. Evening reflection will be available at the end of the day.
-              </p>
-            </div>
+            {generatedTasks ? (
+              <div className="space-y-6">
+                {/* Evening Reflection Prompt */}
+                <div className="text-center p-4 bg-purple-50 rounded-xl">
+                  <p className="text-slate-700 font-medium mb-2">How did your day go?</p>
+                  <p className="text-sm text-slate-500">Reflect on your accomplishments and learnings</p>
+                </div>
+
+                {/* Task Review Checklist */}
+                <div className="space-y-4">
+                  <h3 className="font-medium text-slate-700">Review Your Tasks</h3>
+                  
+                  {/* Big Goal Review */}
+                  <div className="p-3 bg-green-50 rounded-lg">
+                    <div className="flex items-start space-x-3">
+                      <input 
+                        type="checkbox" 
+                        className="mt-1 w-4 h-4 text-green-600 rounded focus:ring-green-500"
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-green-700">Most Important Goal</p>
+                        <p className="text-sm text-slate-700">{generatedTasks.priority1}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Medium Tasks Review */}
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-blue-700">Important Tasks</p>
+                    {generatedTasks.priority3.map((task, index) => (
+                      <div key={index} className="flex items-start space-x-3 p-2 bg-blue-50 rounded">
+                        <input 
+                          type="checkbox" 
+                          className="mt-1 w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                        />
+                        <p className="text-sm text-slate-700">{task}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Small Tasks Review */}
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-purple-700">Supporting Tasks</p>
+                    {generatedTasks.priority5.map((task, index) => (
+                      <div key={index} className="flex items-start space-x-3 p-2 bg-purple-50 rounded">
+                        <input 
+                          type="checkbox" 
+                          className="mt-1 w-4 h-4 text-purple-600 rounded focus:ring-purple-500"
+                        />
+                        <p className="text-sm text-slate-700">{task}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Reflection Text Area */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Evening Reflection
+                  </label>
+                  <textarea
+                    rows={4}
+                    className="w-full px-4 py-3 border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-300 focus:border-transparent bg-white/80 text-slate-700 placeholder-slate-400"
+                    placeholder="What went well today? What did you learn? What would you do differently tomorrow?"
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4 text-center py-12">
+                <svg className="w-16 h-16 text-slate-400 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                <h3 className="text-lg font-medium text-slate-600">Evening Reflection</h3>
+                <p className="text-slate-500 max-w-sm mx-auto">
+                  Complete your morning planning first. Evening reflection will be available after you generate your tasks.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
