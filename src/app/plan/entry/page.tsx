@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import Navigation from '@/components/Navigation';
 import { DatabaseService } from '@/lib/database';
+import { supabase } from '@/lib/supabase';
 
 interface Task {
   priority1: string;
@@ -56,6 +57,28 @@ function EntryContent() {
   const searchParams = useSearchParams();
   const dateParam = searchParams.get('date');
   const { user, isLoading } = useAuth();
+  
+  // Helper function to extract JSON from AI responses
+  const extractJsonFromResponse = (response: string): any => {
+    let cleaned = response.trim();
+    
+    // Remove markdown code blocks
+    if (cleaned.startsWith('```json')) {
+      cleaned = cleaned.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+    } else if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```[a-zA-Z]*\s*/, '').replace(/\s*```$/, '');
+    }
+    
+    // Find JSON object boundaries
+    const jsonStart = cleaned.indexOf('{');
+    const jsonEnd = cleaned.lastIndexOf('}');
+    
+    if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+      cleaned = cleaned.substring(jsonStart, jsonEnd + 1);
+    }
+    
+    return JSON.parse(cleaned);
+  };
   
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [morningPlan, setMorningPlan] = useState<string>('');
@@ -349,10 +372,17 @@ function EntryContent() {
     setIsGenerating(true);
     
     try {
+      // Get auth token for API call
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error('No authentication token available');
+      }
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
           message: `Based on this morning plan: "${morningPlan}", please generate prioritized tasks in this EXACT format. Do not add any other text or explanation:
@@ -393,9 +423,16 @@ Make sure to extract specific goals and tasks mentioned in: "${morningPlan}"`
           generated_tasks: parsedTasks,
         });
       } else {
-        const errorText = await response.text();
-        console.error('API Error:', response.status, errorText);
-        throw new Error(`Failed to generate tasks: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        console.error('API Error:', response.status, errorData);
+        
+        if (response.status === 401) {
+          throw new Error('Authentication failed. Please sign in again.');
+        } else if (response.status === 500) {
+          throw new Error('AI service is currently unavailable. Using fallback tasks.');
+        } else {
+          throw new Error(`Failed to generate tasks: ${response.status}`);
+        }
       }
     } catch (error) {
       console.error('Error generating tasks:', error);
@@ -650,13 +687,20 @@ Make sure to extract specific goals and tasks mentioned in: "${morningPlan}"`
     setIsAnalyzingEvening(true);
     
     try {
+      // Get auth token for API call
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error('No authentication token available');
+      }
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          message: `Please analyze this evening reflection and extract the following information in this exact JSON format:
+          message: `Analyze this evening reflection and return ONLY valid JSON in this exact format. Do not include markdown code blocks, explanations, or any other text - just the raw JSON:
 
 {
   "accomplishments": ["list of 3-5 key accomplishments mentioned"],
@@ -669,9 +713,9 @@ Make sure to extract specific goals and tasks mentioned in: "${morningPlan}"`
   "reflection": "a brief summary of the overall day"
 }
 
-Evening reflection: "${eveningReflection}"
+Evening reflection to analyze: "${eveningReflection}"
 
-Please ensure the response is valid JSON only, no additional text.`
+Return only the JSON object above with the actual analysis data. No markdown, no explanations, no code blocks.`
         }),
       });
 
@@ -684,8 +728,14 @@ Please ensure the response is valid JSON only, no additional text.`
         }
         
         try {
-          // Try to parse the JSON response
-          const analysis = JSON.parse(aiResponse);
+          // Use helper function to extract and parse JSON
+          const analysis = extractJsonFromResponse(aiResponse);
+          
+          // Validate the analysis has required fields
+          if (!analysis.accomplishments || !analysis.mood || !analysis.lessonsLearned) {
+            throw new Error('Invalid analysis structure');
+          }
+          
           setEveningAnalysis(analysis);
           
           // Save to database
@@ -717,6 +767,8 @@ Please ensure the response is valid JSON only, no additional text.`
           }
         } catch (parseError) {
           console.error('Failed to parse AI response as JSON:', parseError);
+          console.error('Raw AI response:', aiResponse);
+          
           // Fallback analysis if JSON parsing fails
           const fallbackAnalysis: EveningAnalysis = {
             accomplishments: [
@@ -738,7 +790,16 @@ Please ensure the response is valid JSON only, no additional text.`
           setEveningAnalysis(fallbackAnalysis);
         }
       } else {
-        throw new Error('Failed to analyze evening reflection');
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Evening analysis API Error:', response.status, errorData);
+        
+        if (response.status === 401) {
+          throw new Error('Authentication failed. Please sign in again.');
+        } else if (response.status === 500) {
+          throw new Error('AI service is currently unavailable. Using fallback analysis.');
+        } else {
+          throw new Error('Failed to analyze evening reflection');
+        }
       }
     } catch (error) {
       console.error('Error analyzing evening reflection:', error);

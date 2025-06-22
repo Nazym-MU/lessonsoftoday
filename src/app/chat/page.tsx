@@ -101,9 +101,6 @@ export default function ChatPage() {
         }
       }
 
-      // Get user context for AI
-      const userContext = await DatabaseService.getUserContext(user.id);
-
       // Add user message to chat
       const userChatMessage: ChatMessage = {
         id: `user-${Date.now()}`,
@@ -129,7 +126,6 @@ export default function ChatPage() {
         },
         body: JSON.stringify({ 
           message: userMessage,
-          context: userContext,
           sessionId: sessionId,
         }),
       });
@@ -157,8 +153,7 @@ export default function ChatPage() {
           user.id,
           userMessage,
           data.response,
-          'assistant',
-          userContext
+          'assistant'
         );
       }
 

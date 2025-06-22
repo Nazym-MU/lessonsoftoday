@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { DatabaseService } from '@/lib/database';
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
 // Create admin client for server-side operations (bypasses RLS)
 const supabaseAdmin = createClient(
@@ -21,7 +20,6 @@ const supabaseAdmin = createClient(
 
 export async function POST(request: NextRequest) {
   try {
-    // Get user from Supabase Auth
     const authHeader = request.headers.get('authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
@@ -29,7 +27,6 @@ export async function POST(request: NextRequest) {
 
     const token = authHeader.substring(7);
     
-    // Verify the user with anon client
     const verifyClient = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -38,7 +35,6 @@ export async function POST(request: NextRequest) {
     const { data: { user }, error: authError } = await verifyClient.auth.getUser(token);
     
     if (authError || !user) {
-      console.error('Auth error:', authError);
       return NextResponse.json({ error: 'Invalid authentication' }, { status: 401 });
     }
 
@@ -57,7 +53,6 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid analysis type' }, { status: 400 });
     }
   } catch (error) {
-    console.error('Error in analysis API:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
@@ -105,13 +100,8 @@ async function handleDailyComparison(userId: string, date: string, supabase: any
     }
     `;
 
-    const response = await anthropic.messages.create({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 1000,
-      messages: [{ role: 'user', content: comparisonPrompt }],
-    });
-
-    const aiResponse = response.content[0].type === 'text' ? response.content[0].text : '{}';
+    const response = await model.generateContent(comparisonPrompt);
+    const aiResponse = response.response.text();
     
     let analysis;
     try {
@@ -256,13 +246,8 @@ async function handleEncouragingFeedback(userId: string, date: string, supabase:
     Keep it warm, personal, and under 200 words.
     `;
 
-    const response = await anthropic.messages.create({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 500,
-      messages: [{ role: 'user', content: feedbackPrompt }],
-    });
-
-    const feedback = response.content[0].type === 'text' ? response.content[0].text : 
+    const response = await model.generateContent(feedbackPrompt);
+    const feedback = response.response.text() || 
       "You're doing great! Every day you show up for yourself is a victory. Keep going! 🌟";
 
     return NextResponse.json({ feedback });

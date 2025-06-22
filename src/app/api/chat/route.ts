@@ -1,14 +1,16 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
 export async function POST(request: NextRequest) {
   try {
-    // Get user from Supabase Auth
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json({ error: 'AI service not configured' }, { status: 500 });
+    }
+
     const authHeader = request.headers.get('authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
@@ -16,13 +18,13 @@ export async function POST(request: NextRequest) {
 
     const token = authHeader.substring(7);
     
-    // Verify the user with anon client
-    const verifyClient = createClient(
+    const supabaseAdmin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } }
     );
     
-    const { data: { user }, error: authError } = await verifyClient.auth.getUser(token);
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
     
     if (authError || !user) {
       return NextResponse.json({ error: 'Invalid authentication' }, { status: 401 });
@@ -34,22 +36,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Message is required' }, { status: 400 });
     }
 
-    const response = await anthropic.messages.create({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 1000,
-      messages: [
-        {
-          role: 'user',
-          content: message,
-        },
-      ],
-    });
+    const response = await model.generateContent(message);
+    const responseText = response.response.text();
+
+    if (!responseText) {
+      throw new Error('Empty response from Gemini');
+    }
 
     return NextResponse.json({ 
-      response: response.content[0].type === 'text' ? response.content[0].text : 'No response' 
+      response: responseText
     });
   } catch (error) {
-    console.error('Error calling Anthropic API:', error);
+    if (error instanceof Error) {
+      if (error.message.includes('API key')) {
+        return NextResponse.json({ error: 'AI service configuration error' }, { status: 500 });
+      }
+      if (error.message.includes('quota') || error.message.includes('rate limit')) {
+        return NextResponse.json({ error: 'AI service temporarily unavailable' }, { status: 429 });
+      }
+    }
+    
     return NextResponse.json({ error: 'Failed to get response' }, { status: 500 });
   }
 }

@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.54.0",
+    "@google/generative-ai": "^0.24.1",
     "@next/env": "^15.3.4",
     "@next/swc-wasm-nodejs": "^15.3.4",
     "@supabase/auth-ui-react": "^0.4.7",

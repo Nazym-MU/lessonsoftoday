@@ -87,9 +87,10 @@ export class DatabaseService {
     }
   }
 
-  static async getDailyEntry(userId: string, date: string): Promise<DailyEntry | null> {
+  static async getDailyEntry(userId: string, date: string, client?: any): Promise<DailyEntry | null> {
     try {
-      const { data, error } = await supabase
+      const supabaseClient = client || supabase;
+      const { data, error } = await supabaseClient
         .from('daily_entries')
         .select('*')
         .eq('user_id', userId)
@@ -104,9 +105,10 @@ export class DatabaseService {
     }
   }
 
-  static async getDailyEntries(userId: string, limit: number = 30): Promise<DailyEntry[]> {
+  static async getDailyEntries(userId: string, limit: number = 30, client?: any): Promise<DailyEntry[]> {
     try {
-      const { data, error } = await supabase
+      const supabaseClient = client || supabase;
+      const { data, error } = await supabaseClient
         .from('daily_entries')
         .select('*')
         .eq('user_id', userId)
@@ -138,12 +140,13 @@ export class DatabaseService {
     }
   }
 
-  static async getMoodEntries(userId: string, days: number = 30): Promise<MoodEntry[]> {
+  static async getMoodEntries(userId: string, days: number = 30, client?: any): Promise<MoodEntry[]> {
     try {
+      const supabaseClient = client || supabase;
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - days);
 
-      const { data, error } = await supabase
+      const { data, error } = await supabaseClient
         .from('mood_entries')
         .select('*')
         .eq('user_id', userId)
@@ -184,12 +187,13 @@ export class DatabaseService {
     }
   }
 
-  static async getAccomplishments(userId: string, days: number = 30) {
+  static async getAccomplishments(userId: string, days: number = 30, client?: any) {
     try {
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - days);
 
-      const { data, error } = await supabase
+      const supabaseClient = client || supabase;
+      const { data, error } = await supabaseClient
         .from('accomplishments')
         .select(`
           *,
@@ -233,12 +237,13 @@ export class DatabaseService {
     }
   }
 
-  static async getLessonsLearned(userId: string, days: number = 30) {
+  static async getLessonsLearned(userId: string, days: number = 30, client?: any) {
     try {
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - days);
 
-      const { data, error } = await supabase
+      const supabaseClient = client || supabase;
+      const { data, error } = await supabaseClient
         .from('lessons_learned')
         .select(`
           *,
@@ -411,13 +416,13 @@ export class DatabaseService {
   }
 
   // User Context for AI
-  static async getUserContext(userId: string, days: number = 7) {
+  static async getUserContext(userId: string, days: number = 7, client?: any) {
     try {
       const [dailyEntries, moodEntries, accomplishments, lessons] = await Promise.all([
-        this.getDailyEntries(userId, days),
-        this.getMoodEntries(userId, days),
-        this.getAccomplishments(userId, days),
-        this.getLessonsLearned(userId, days),
+        this.getDailyEntries(userId, days, client),
+        this.getMoodEntries(userId, days, client),
+        this.getAccomplishments(userId, days, client),
+        this.getLessonsLearned(userId, days, client),
       ]);
 
       return {
