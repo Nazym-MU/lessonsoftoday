@@ -1,12 +1,24 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 import Link from 'next/link';
 import Navigation from '@/components/Navigation';
+import { DatabaseService } from '@/lib/database';
+import { supabaseClient } from '@/lib/supabase';
+
+interface Quote {
+  quote: string;
+  author: string;
+  category: string;
+}
 
 export default function Home() {
+  const { user, isLoading } = useAuth();
   const [selectedMood, setSelectedMood] = useState<string>('');
-  const [progress] = useState(65);
+  const [progress, setProgress] = useState(65);
+  const [quote, setQuote] = useState<Quote | null>(null);
+  const [analysis, setAnalysis] = useState<any>(null);
 
   const moods = [
     { emoji: '😊', label: 'Happy' },
@@ -17,20 +29,96 @@ export default function Home() {
     { emoji: '🙂', label: 'Neutral' },
   ];
 
+  useEffect(() => {
+    loadQuote();
+    if (!isLoading && user) {
+      loadUserProgress();
+    }
+  }, [isLoading, user]);
+
+  const loadQuote = async () => {
+    try {
+      const randomQuote = await DatabaseService.getRandomQuote();
+      setQuote(randomQuote);
+    } catch (error) {
+      console.error('Error loading quote:', error);
+    }
+  };
+
+  const loadUserProgress = async () => {
+    if (!user) return;
+    
+    try {
+      // Get auth token
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (!session) {
+        console.error('No session found');
+        return;
+      }
+
+      const response = await fetch('/api/analysis', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ type: 'progress_tracking' }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setProgress(Math.round(data.progress.consistency));
+        setAnalysis(data.progress);
+      } else {
+        console.error('Failed to load progress:', response.status);
+      }
+    } catch (error) {
+      console.error('Error loading progress:', error);
+    }
+  };
+
+  const handleMoodSelect = async (mood: string) => {
+    setSelectedMood(mood);
+    
+    if (user) {
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        await DatabaseService.createMoodEntry({
+          user_id: user.id,
+          date: today,
+          mood: mood.toLowerCase(),
+          confidence: 0.8,
+          description: `User selected ${mood} from home page`,
+          source: 'manual',
+        });
+      } catch (error) {
+        console.error('Error saving mood:', error);
+      }
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-blue-50 to-green-50">
       <Navigation />
       
       <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-6">
         
-        {/* Quote from the Past Section */}
+        {/* Inspirational Quote Section */}
         <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border border-white/50 p-6">
           <div className="text-center">
-            <h2 className="text-lg font-medium text-slate-600 mb-3">Quote from the Past</h2>
-            <blockquote className="text-slate-700 italic text-base leading-relaxed">
-              "The journey of a thousand miles begins with a single step. Remember to be gentle with yourself today."
-            </blockquote>
-            <p className="text-sm text-slate-500 mt-3">- You, 3 months ago</p>
+            <h2 className="text-lg font-medium text-slate-600 mb-3">Daily Inspiration</h2>
+            {quote ? (
+              <>
+                <blockquote className="text-slate-700 italic text-base leading-relaxed">
+                  "{quote.quote}"
+                </blockquote>
+                <p className="text-sm text-slate-500 mt-3">- {quote.author}</p>
+              </>
+            ) : (
+              <div className="flex items-center justify-center py-8">
+                <div className="w-6 h-6 border-2 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -89,7 +177,7 @@ export default function Home() {
             {moods.map((mood) => (
               <button
                 key={mood.label}
-                onClick={() => setSelectedMood(mood.label)}
+                onClick={() => handleMoodSelect(mood.label)}
                 className={`flex flex-col items-center p-3 rounded-xl transition-all duration-200 ${
                   selectedMood === mood.label
                     ? 'bg-blue-100 border-2 border-blue-300 shadow-sm scale-105'

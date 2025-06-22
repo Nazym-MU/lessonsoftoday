@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
 import Navigation from '@/components/Navigation';
+import { DatabaseService } from '@/lib/database';
 
 interface Task {
   priority1: string;
@@ -53,6 +55,7 @@ function EntryContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const dateParam = searchParams.get('date');
+  const { user, isLoading } = useAuth();
   
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [morningPlan, setMorningPlan] = useState<string>('');
@@ -87,6 +90,36 @@ function EntryContent() {
       setSelectedDate(today);
     }
   }, [dateParam]);
+
+  useEffect(() => {
+    if (!isLoading && user && selectedDate) {
+      loadExistingEntry();
+    }
+  }, [isLoading, user, selectedDate]);
+
+  const loadExistingEntry = async () => {
+    if (!user || !selectedDate) return;
+    
+    try {
+      const entry = await DatabaseService.getDailyEntry(user.id, selectedDate);
+      if (entry) {
+        setMorningPlan(entry.morning_plan || '');
+        setTranscript(entry.morning_transcript || '');
+        setEveningReflection(entry.evening_reflection || '');
+        setEveningTranscript(entry.evening_transcript || '');
+        
+        if (entry.generated_tasks) {
+          setGeneratedTasks(entry.generated_tasks as unknown as Task);
+        }
+        
+        if (entry.evening_analysis) {
+          setEveningAnalysis(entry.evening_analysis as unknown as EveningAnalysis);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading existing entry:', error);
+    }
+  };
 
   useEffect(() => {
     // Check for Web Speech API support
@@ -322,23 +355,23 @@ function EntryContent() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          message: `Based on this morning plan: "${morningPlan}", please generate prioritized tasks in this exact format:
-          
-          1 BIG GOAL: [One most important task for the day]
-          
-          3 MEDIUM TASKS:
-          - [Important task 1]
-          - [Important task 2] 
-          - [Important task 3]
-          
-          5 SMALL TASKS:
-          - [Supporting task 1]
-          - [Supporting task 2]
-          - [Supporting task 3]
-          - [Supporting task 4]
-          - [Supporting task 5]
-          
-          Please make them actionable and relevant to the morning plan provided.`
+          message: `Based on this morning plan: "${morningPlan}", please generate prioritized tasks in this EXACT format. Do not add any other text or explanation:
+
+1 BIG GOAL: [Extract or create ONE most important task from the morning plan]
+
+3 MEDIUM TASKS:
+- [Important task 1 based on the plan]
+- [Important task 2 based on the plan] 
+- [Important task 3 based on the plan]
+
+5 SMALL TASKS:
+- [Supporting task 1 based on the plan]
+- [Supporting task 2 based on the plan]
+- [Supporting task 3 based on the plan]
+- [Supporting task 4 based on the plan]
+- [Supporting task 5 based on the plan]
+
+Make sure to extract specific goals and tasks mentioned in: "${morningPlan}"`
         }),
       });
 
@@ -352,6 +385,13 @@ function EntryContent() {
         
         const parsedTasks = parseAIResponse(aiResponse);
         setGeneratedTasks(parsedTasks);
+        
+        // Save to database
+        await saveDailyEntry({
+          morning_plan: morningPlan,
+          morning_transcript: transcript,
+          generated_tasks: parsedTasks,
+        });
       } else {
         const errorText = await response.text();
         console.error('API Error:', response.status, errorText);
@@ -400,21 +440,60 @@ function EntryContent() {
     let currentSection = '';
     
     for (const line of lines) {
-      if (line.includes('BIG GOAL') || line.includes('MOST IMPORTANT')) {
+      if (line.includes('1 BIG GOAL') || line.includes('BIG GOAL') || line.includes('MOST IMPORTANT')) {
         currentSection = 'big';
-        const match = line.match(/:\s*(.+)/);
-        if (match) priority1 = match[1];
-      } else if (line.includes('MEDIUM TASKS') || line.includes('IMPORTANT TASKS')) {
+        // Look for content after the colon
+        const colonIndex = line.indexOf(':');
+        if (colonIndex !== -1) {
+          const extracted = line.substring(colonIndex + 1).trim();
+          // Remove brackets and extract content
+          const cleaned = extracted.replace(/^\[|\]$/g, '').trim();
+          if (cleaned && cleaned.length > 3 && !cleaned.toLowerCase().includes('extract') && !cleaned.toLowerCase().includes('create')) {
+            priority1 = cleaned;
+          }
+        }
+      } else if (line.includes('3 MEDIUM TASKS') || line.includes('MEDIUM TASKS') || line.includes('IMPORTANT TASKS')) {
         currentSection = 'medium';
-      } else if (line.includes('SMALL TASKS') || line.includes('SUPPORTING TASKS')) {
+      } else if (line.includes('5 SMALL TASKS') || line.includes('SMALL TASKS') || line.includes('SUPPORTING TASKS')) {
         currentSection = 'small';
       } else if (line.startsWith('-') || line.startsWith('•')) {
-        const task = line.replace(/^[-•]\s*/, '');
-        if (currentSection === 'medium' && priority3.length < 3) {
-          priority3.push(task);
-        } else if (currentSection === 'small' && priority5.length < 5) {
-          priority5.push(task);
+        let task = line.replace(/^[-•]\s*/, '').trim();
+        // Remove brackets and placeholder text
+        task = task.replace(/^\[|\]$/g, '').trim();
+        
+        // Skip placeholder text
+        if (task && 
+            !task.toLowerCase().includes('important task') && 
+            !task.toLowerCase().includes('supporting task') &&
+            !task.toLowerCase().includes('based on') &&
+            task.length > 5) {
+          
+          if (currentSection === 'medium' && priority3.length < 3) {
+            priority3.push(task);
+          } else if (currentSection === 'small' && priority5.length < 5) {
+            priority5.push(task);
+          }
         }
+      }
+    }
+    
+    // If no main goal was extracted, try to create one from the morning plan
+    if (!priority1 && morningPlan) {
+      const planWords = morningPlan.toLowerCase();
+      if (planWords.includes('presentation')) {
+        priority1 = 'Complete and deliver presentation';
+      } else if (planWords.includes('meeting')) {
+        priority1 = 'Attend and contribute to important meetings';
+      } else if (planWords.includes('project')) {
+        priority1 = 'Make significant progress on main project';
+      } else if (planWords.includes('work')) {
+        priority1 = 'Focus on most important work tasks';
+      } else if (planWords.includes('exercise') || planWords.includes('gym')) {
+        priority1 = 'Complete workout and exercise routine';
+      } else {
+        // Extract first meaningful sentence or phrase
+        const sentences = morningPlan.split(/[.!?]/).map(s => s.trim()).filter(s => s.length > 10);
+        priority1 = sentences[0] || 'Focus on your most important task';
       }
     }
     
@@ -549,6 +628,22 @@ function EntryContent() {
     }
   };
 
+  const saveDailyEntry = async (partialData: any) => {
+    if (!user || !selectedDate) return;
+    
+    try {
+      const entryData = {
+        user_id: user.id,
+        date: selectedDate,
+        ...partialData,
+      };
+      
+      await DatabaseService.createOrUpdateDailyEntry(entryData);
+    } catch (error) {
+      console.error('Error saving daily entry:', error);
+    }
+  };
+
   const analyzeEveningReflection = async () => {
     if (!eveningReflection.trim()) return;
 
@@ -592,6 +687,34 @@ Please ensure the response is valid JSON only, no additional text.`
           // Try to parse the JSON response
           const analysis = JSON.parse(aiResponse);
           setEveningAnalysis(analysis);
+          
+          // Save to database
+          await saveDailyEntry({
+            evening_reflection: eveningReflection,
+            evening_transcript: eveningTranscript,
+            evening_analysis: analysis,
+          });
+          
+          // Save mood entry
+          if (user && analysis.mood) {
+            await DatabaseService.createMoodEntry({
+              user_id: user.id,
+              date: selectedDate,
+              mood: analysis.mood.detected,
+              confidence: analysis.mood.confidence,
+              description: analysis.mood.description,
+              source: 'ai_detected',
+            });
+          }
+          
+          // Save accomplishments and lessons
+          if (user && analysis.accomplishments && analysis.lessonsLearned) {
+            const entry = await DatabaseService.getDailyEntry(user.id, selectedDate);
+            if (entry) {
+              await DatabaseService.createAccomplishments(user.id, entry.id, analysis.accomplishments);
+              await DatabaseService.createLessonsLearned(user.id, entry.id, analysis.lessonsLearned);
+            }
+          }
         } catch (parseError) {
           console.error('Failed to parse AI response as JSON:', parseError);
           // Fallback analysis if JSON parsing fails
