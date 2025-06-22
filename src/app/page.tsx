@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import Navigation from '@/components/Navigation';
 
 export default function Home() {
   const [selectedMood, setSelectedMood] = useState<string>('');
@@ -17,8 +18,10 @@ export default function Home() {
   ];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-blue-50 to-green-50 p-4 sm:p-6">
-      <div className="max-w-4xl mx-auto space-y-6">
+    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-blue-50 to-green-50">
+      <Navigation />
+      
+      <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-6">
         
         {/* Quote from the Past Section */}
         <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border border-white/50 p-6">
@@ -51,7 +54,7 @@ export default function Home() {
             </div>
           </Link>
 
-          <button className="group bg-gradient-to-br from-green-100 to-green-200 hover:from-green-200 hover:to-green-300 rounded-2xl p-8 shadow-sm border border-green-200/50 transition-all duration-300 hover:shadow-md hover:scale-[1.02]">
+          <Link href="/plan" className="group bg-gradient-to-br from-green-100 to-green-200 hover:from-green-200 hover:to-green-300 rounded-2xl p-8 shadow-sm border border-green-200/50 transition-all duration-300 hover:shadow-md hover:scale-[1.02]">
             <div className="flex flex-col items-center space-y-3">
               <div className="w-12 h-12 bg-green-300/50 rounded-full flex items-center justify-center group-hover:bg-green-400/50 transition-colors">
                 <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -61,7 +64,7 @@ export default function Home() {
               <h3 className="text-xl font-medium text-slate-700">Plan</h3>
               <p className="text-sm text-slate-600 text-center">Set goals and track progress</p>
             </div>
-          </button>
+          </Link>
         </div>
 
         {/* Progress Bar Component */}

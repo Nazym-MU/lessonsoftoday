@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
+import Navigation from '@/components/Navigation';
 
 export default function ChatPage() {
   const [message, setMessage] = useState('');
@@ -36,22 +36,14 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-blue-50 to-green-50 p-4 sm:p-6">
-      <div className="max-w-4xl mx-auto">
-        
-        {/* Header with Back Button */}
-        <div className="flex items-center justify-between mb-6">
-          <Link 
-            href="/"
-            className="flex items-center space-x-2 text-slate-600 hover:text-slate-800 transition-colors"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-            <span>Back</span>
-          </Link>
-          <h1 className="text-2xl font-light text-slate-700">AI Chat</h1>
-          <div className="w-16"></div>
+    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-blue-50 to-green-50">
+      <Navigation />
+      
+      <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-6">
+        {/* Header */}
+        <div className="text-center py-4">
+          <h1 className="text-3xl sm:text-4xl font-light text-slate-700 mb-2">AI Chat</h1>
+          <p className="text-slate-500">Talk with your AI companion</p>
         </div>
 
         {/* Chat Interface */}
