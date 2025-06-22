@@ -10,6 +10,17 @@ interface Task {
   priority5: string[];
 }
 
+interface EveningAnalysis {
+  accomplishments: string[];
+  mood: {
+    detected: string;
+    confidence: number;
+    description: string;
+  };
+  lessonsLearned: string[];
+  reflection: string;
+}
+
 interface SpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
   resultIndex: number;
@@ -53,7 +64,16 @@ function EntryContent() {
   const [audioLevel, setAudioLevel] = useState<number>(0);
   const [supportsWebSpeech, setSupportsWebSpeech] = useState<boolean>(false);
   
+  // Evening specific states
+  const [eveningTranscript, setEveningTranscript] = useState<string>('');
+  const [isEveningRecording, setIsEveningRecording] = useState<boolean>(false);
+  const [isEveningTranscribing, setIsEveningTranscribing] = useState<boolean>(false);
+  const [eveningReflection, setEveningReflection] = useState<string>('');
+  const [eveningAnalysis, setEveningAnalysis] = useState<EveningAnalysis | null>(null);
+  const [isAnalyzingEvening, setIsAnalyzingEvening] = useState<boolean>(false);
+  
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const eveningRecognitionRef = useRef<SpeechRecognition | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationRef = useRef<number | null>(null);
@@ -144,6 +164,76 @@ function EntryContent() {
         };
         
         recognitionRef.current = recognition;
+
+        // Setup evening recognition
+        const eveningRecognition = new SpeechRecognition();
+        eveningRecognition.continuous = true;
+        eveningRecognition.interimResults = true;
+        eveningRecognition.lang = 'en-US';
+        
+        eveningRecognition.onstart = () => {
+          setIsEveningTranscribing(true);
+        };
+        
+        eveningRecognition.onresult = (event: SpeechRecognitionEvent) => {
+          let interimTranscript = '';
+          let finalTranscript = '';
+          
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              finalTranscript += transcript + ' ';
+            } else {
+              interimTranscript += transcript;
+            }
+          }
+          
+          if (finalTranscript) {
+            setEveningTranscript(prev => prev + finalTranscript);
+            setEveningReflection(prev => prev + finalTranscript);
+          }
+        };
+        
+        eveningRecognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+          console.error('Evening speech recognition error:', event.error);
+          setIsEveningRecording(false);
+          setIsEveningTranscribing(false);
+          
+          // Handle specific error types
+          let errorMessage = '';
+          switch (event.error) {
+            case 'network':
+              errorMessage = 'Network error. Please check your internet connection and try again.';
+              break;
+            case 'not-allowed':
+              errorMessage = 'Microphone access denied. Please allow microphone permissions and try again.';
+              break;
+            case 'no-speech':
+              errorMessage = 'No speech detected. Please try speaking again.';
+              break;
+            case 'audio-capture':
+              errorMessage = 'Audio capture failed. Please check your microphone and try again.';
+              break;
+            case 'service-not-allowed':
+              errorMessage = 'Speech recognition service not available. Please try again later.';
+              break;
+            default:
+              errorMessage = `Speech recognition error: ${event.error}. Please try again.`;
+          }
+          
+          setTimeout(() => {
+            alert(errorMessage);
+          }, 100);
+        };
+        
+        eveningRecognition.onend = () => {
+          setIsEveningTranscribing(false);
+          if (isEveningRecording) {
+            eveningRecognition.start();
+          }
+        };
+        
+        eveningRecognitionRef.current = eveningRecognition;
       }
     };
     
@@ -153,6 +243,9 @@ function EntryContent() {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
+      if (eveningRecognitionRef.current) {
+        eveningRecognitionRef.current.stop();
+      }
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
@@ -160,7 +253,7 @@ function EntryContent() {
         audioContextRef.current.close();
       }
     };
-  }, [isRecording]);
+  }, [isRecording, isEveningRecording]);
 
   const formatDisplayDate = (dateStr: string): string => {
     const date = new Date(dateStr + 'T00:00:00');
@@ -203,7 +296,7 @@ function EntryContent() {
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
       
       const updateAudioLevel = () => {
-        if (analyserRef.current && isRecording) {
+        if (analyserRef.current && (isRecording || isEveningRecording)) {
           analyserRef.current.getByteFrequencyData(dataArray);
           const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
           setAudioLevel(average / 255);
@@ -391,6 +484,162 @@ function EntryContent() {
           alert('Error starting voice recording. Please try again.');
         }
       }
+    }
+  };
+
+  const handleEveningVoiceRecord = async () => {
+    if (!supportsWebSpeech) {
+      alert('Speech recognition is not supported in your browser. Please use Chrome or Edge for voice features.');
+      return;
+    }
+
+    if (isEveningRecording) {
+      // Stop recording
+      setIsEveningRecording(false);
+      if (eveningRecognitionRef.current) {
+        eveningRecognitionRef.current.stop();
+      }
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+      setAudioLevel(0);
+    } else {
+      try {
+        // Check for microphone permissions first
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop()); // Stop immediately after permission check
+        
+        // Start recording
+        setIsEveningRecording(true);
+        setEveningTranscript('');
+        
+        if (eveningRecognitionRef.current) {
+          try {
+            eveningRecognitionRef.current.start();
+          } catch (error) {
+            console.error('Failed to start evening speech recognition:', error);
+            setIsEveningRecording(false);
+            alert('Failed to start speech recognition. Please try again.');
+            return;
+          }
+        }
+        
+        // Start audio visualization
+        await startAudioVisualization();
+      } catch (error) {
+        console.error('Evening microphone access error:', error);
+        setIsEveningRecording(false);
+        
+        if (error instanceof DOMException) {
+          if (error.name === 'NotAllowedError') {
+            alert('Microphone access denied. Please allow microphone permissions in your browser settings and try again.');
+          } else if (error.name === 'NotFoundError') {
+            alert('No microphone found. Please connect a microphone and try again.');
+          } else {
+            alert('Error accessing microphone. Please check your microphone settings and try again.');
+          }
+        } else {
+          alert('Error starting voice recording. Please try again.');
+        }
+      }
+    }
+  };
+
+  const analyzeEveningReflection = async () => {
+    if (!eveningReflection.trim()) return;
+
+    setIsAnalyzingEvening(true);
+    
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: `Please analyze this evening reflection and extract the following information in this exact JSON format:
+
+{
+  "accomplishments": ["list of 3-5 key accomplishments mentioned"],
+  "mood": {
+    "detected": "primary emotion (happy/satisfied/frustrated/tired/motivated/etc)",
+    "confidence": 0.8,
+    "description": "brief description of the emotional state"
+  },
+  "lessonsLearned": ["list of 2-4 key lessons or insights mentioned"],
+  "reflection": "a brief summary of the overall day"
+}
+
+Evening reflection: "${eveningReflection}"
+
+Please ensure the response is valid JSON only, no additional text.`
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const aiResponse = data?.response || data?.message || data?.content || '';
+        
+        if (!aiResponse) {
+          throw new Error('Empty response from AI');
+        }
+        
+        try {
+          // Try to parse the JSON response
+          const analysis = JSON.parse(aiResponse);
+          setEveningAnalysis(analysis);
+        } catch (parseError) {
+          console.error('Failed to parse AI response as JSON:', parseError);
+          // Fallback analysis if JSON parsing fails
+          const fallbackAnalysis: EveningAnalysis = {
+            accomplishments: [
+              'Completed daily reflection',
+              'Shared thoughts about the day',
+              'Took time for self-reflection'
+            ],
+            mood: {
+              detected: 'reflective',
+              confidence: 0.7,
+              description: 'Taking time to think about the day'
+            },
+            lessonsLearned: [
+              'Reflection is important for growth',
+              'Every day brings new experiences'
+            ],
+            reflection: 'A day of learning and reflection'
+          };
+          setEveningAnalysis(fallbackAnalysis);
+        }
+      } else {
+        throw new Error('Failed to analyze evening reflection');
+      }
+    } catch (error) {
+      console.error('Error analyzing evening reflection:', error);
+      // Fallback analysis
+      const fallbackAnalysis: EveningAnalysis = {
+        accomplishments: [
+          'Completed daily tasks',
+          'Engaged in reflection',
+          'Documented the day'
+        ],
+        mood: {
+          detected: 'content',
+          confidence: 0.6,
+          description: 'A balanced day overall'
+        },
+        lessonsLearned: [
+          'Each day offers opportunities to learn',
+          'Reflection helps process experiences'
+        ],
+        reflection: 'A productive day with valuable insights'
+      };
+      setEveningAnalysis(fallbackAnalysis);
+    } finally {
+      setIsAnalyzingEvening(false);
     }
   };
 
@@ -616,6 +865,184 @@ function EntryContent() {
                   <p className="text-sm text-slate-500">Reflect on your accomplishments and learnings</p>
                 </div>
 
+                {/* Evening Voice Recording Section */}
+                <div className="space-y-4">
+                  {/* Recording Button with Audio Visualization */}
+                  <div className="flex flex-col items-center space-y-4">
+                    <button
+                      onClick={handleEveningVoiceRecord}
+                      disabled={!supportsWebSpeech}
+                      className={`relative flex items-center space-x-2 px-6 py-3 rounded-xl font-medium transition-all duration-200 ${
+                        isEveningRecording
+                          ? 'bg-purple-500 hover:bg-purple-600 text-white'
+                          : supportsWebSpeech 
+                          ? 'bg-purple-100 hover:bg-purple-200 text-purple-700'
+                          : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      }`}
+                    >
+                      {/* Audio Level Indicator */}
+                      {isEveningRecording && (
+                        <div 
+                          className="absolute inset-0 bg-purple-400 rounded-xl opacity-30 transition-all duration-100"
+                          style={{ 
+                            transform: `scale(${1 + audioLevel * 0.3})`,
+                            opacity: 0.3 + audioLevel * 0.4
+                          }}
+                        />
+                      )}
+                      
+                      <svg className="w-5 h-5 relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                      </svg>
+                      <span className="relative z-10">
+                        {isEveningRecording ? 'Stop Recording' : 
+                         supportsWebSpeech ? 'Record Reflection' : 'Voice Not Supported'}
+                      </span>
+                    </button>
+
+                    {/* Audio Visualization Bars */}
+                    {isEveningRecording && (
+                      <div className="flex items-center space-x-1">
+                        {[...Array(5)].map((_, i) => (
+                          <div
+                            key={i}
+                            className="w-1 bg-purple-500 rounded-full transition-all duration-100"
+                            style={{
+                              height: `${8 + Math.random() * audioLevel * 20}px`,
+                              opacity: 0.7 + audioLevel * 0.3
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Recording Status */}
+                    {isEveningRecording && (
+                      <div className="flex items-center space-x-2 text-sm text-purple-600">
+                        <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
+                        <span>
+                          {isEveningTranscribing ? 'Listening...' : 'Starting...'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Live Transcription Display */}
+                  {(eveningTranscript || isEveningRecording) && (
+                    <div className="p-4 bg-purple-50 rounded-xl border border-purple-200">
+                      <div className="flex items-center space-x-2 mb-2">
+                        <svg className="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-1l-4 4z" />
+                        </svg>
+                        <span className="text-sm font-medium text-purple-700">Evening Transcription</span>
+                      </div>
+                      <p className="text-slate-700 text-sm leading-relaxed">
+                        {eveningTranscript || (isEveningRecording ? 'Start speaking about your day...' : '')}
+                        {isEveningTranscribing && <span className="inline-block w-2 h-4 bg-purple-400 animate-pulse ml-1" />}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Text Input Alternative */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Or type your evening reflection
+                  </label>
+                  <textarea
+                    value={eveningReflection}
+                    onChange={(e) => setEveningReflection(e.target.value)}
+                    rows={4}
+                    className="w-full px-4 py-3 border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-300 focus:border-transparent bg-white/80 text-slate-700 placeholder-slate-400"
+                    placeholder="What went well today? What did you learn? What would you do differently tomorrow?"
+                  />
+                </div>
+
+                {/* Analyze Reflection Button */}
+                <button
+                  onClick={analyzeEveningReflection}
+                  disabled={!eveningReflection.trim() || isAnalyzingEvening}
+                  className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white py-3 px-4 rounded-xl font-medium transition-all duration-200 hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isAnalyzingEvening ? (
+                    <div className="flex items-center justify-center space-x-2">
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                      <span>Analyzing Reflection...</span>
+                    </div>
+                  ) : (
+                    'Analyze My Day'
+                  )}
+                </button>
+
+                {/* Evening Analysis Results */}
+                {eveningAnalysis && (
+                  <div className="space-y-4 p-4 bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl border border-purple-200">
+                    <h3 className="font-medium text-slate-700 text-center">Day Analysis</h3>
+                    
+                    {/* Accomplishments */}
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-medium text-green-700 flex items-center space-x-1">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>Accomplishments</span>
+                      </h4>
+                      <div className="pl-5 space-y-1">
+                        {eveningAnalysis.accomplishments.map((accomplishment, index) => (
+                          <p key={index} className="text-sm text-slate-700 p-2 bg-white rounded-lg">{accomplishment}</p>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Mood */}
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-medium text-purple-700 flex items-center space-x-1">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>Detected Mood</span>
+                      </h4>
+                      <div className="pl-5">
+                        <div className="p-3 bg-white rounded-lg">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm font-medium capitalize text-slate-700">{eveningAnalysis.mood.detected}</span>
+                            <span className="text-xs text-slate-500">{Math.round(eveningAnalysis.mood.confidence * 100)}% confidence</span>
+                          </div>
+                          <p className="text-sm text-slate-600">{eveningAnalysis.mood.description}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Lessons Learned */}
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-medium text-blue-700 flex items-center space-x-1">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                        <span>Lessons Learned</span>
+                      </h4>
+                      <div className="pl-5 space-y-1">
+                        {eveningAnalysis.lessonsLearned.map((lesson, index) => (
+                          <p key={index} className="text-sm text-slate-700 p-2 bg-white rounded-lg">{lesson}</p>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Daily Summary */}
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-medium text-slate-700 flex items-center space-x-1">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <span>Day Summary</span>
+                      </h4>
+                      <div className="pl-5">
+                        <p className="text-sm text-slate-700 p-3 bg-white rounded-lg italic">{eveningAnalysis.reflection}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Task Review Checklist */}
                 <div className="space-y-4">
                   <h3 className="font-medium text-slate-700">Review Your Tasks</h3>
@@ -661,18 +1088,6 @@ function EntryContent() {
                       </div>
                     ))}
                   </div>
-                </div>
-
-                {/* Reflection Text Area */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Evening Reflection
-                  </label>
-                  <textarea
-                    rows={4}
-                    className="w-full px-4 py-3 border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-300 focus:border-transparent bg-white/80 text-slate-700 placeholder-slate-400"
-                    placeholder="What went well today? What did you learn? What would you do differently tomorrow?"
-                  />
                 </div>
               </div>
             ) : (
